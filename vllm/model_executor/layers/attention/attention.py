@@ -9,6 +9,7 @@ import torch.nn as nn
 import vllm.envs as envs
 from vllm.config import CacheConfig, get_current_vllm_config
 from vllm.config.vllm import VllmConfig
+from vllm.context_log import context_end, context_start
 from vllm.forward_context import ForwardContext, get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention.kv_transfer_utils import (
@@ -766,7 +767,9 @@ def unified_attention_with_output(
     del kv_cache_dummy_dep
     layer_name = _resolve_layer_name(layer_name)
     attn_metadata, self, kv_cache, _ = get_attention_context(layer_name)
-
+    context_start(
+        f"DEBUG: in unified_attention_with_output, layer_name: {layer_name}, self.impl = {type(self.impl)}"
+    )
     self.impl.forward(
         self,
         query,
@@ -778,6 +781,7 @@ def unified_attention_with_output(
         output_scale=output_scale,
         output_block_scale=output_block_scale,
     )
+    context_end()
 
 
 def unified_attention_with_output_fake(

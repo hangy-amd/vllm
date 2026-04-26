@@ -22,6 +22,7 @@ from packaging.version import Version
 from pydantic import ConfigDict, Field, model_validator
 
 import vllm.envs as envs
+from vllm.context_log import debug_log
 from vllm.logger import enable_trace_function_call, init_logger
 from vllm.transformers_utils.runai_utils import is_runai_obj_uri
 from vllm.utils import random_uuid
@@ -1383,14 +1384,23 @@ class VllmConfig:
         upper bound on the number of slots that can be added.
         """
         if self.speculative_config is not None:
+            debug_log(
+                f"DEBUG: in VllmConfig._set_max_num_scheduled_tokens, self.speculative_config.max_num_new_slots_for_drafting = {self.speculative_config.max_num_new_slots_for_drafting}, self.scheduler_config.max_num_seqs = {self.scheduler_config.max_num_seqs}"
+            )
             scheduled_token_delta = (
                 self.speculative_config.max_num_new_slots_for_drafting
                 * self.scheduler_config.max_num_seqs
             )
             max_num_batched_tokens = self.scheduler_config.max_num_batched_tokens
             if self.scheduler_config.max_num_scheduled_tokens is None:
+                debug_log(
+                    f"DEBUG: in VllmConfig._set_max_num_scheduled_tokens, max_num_batched_tokens = {max_num_batched_tokens}, scheduled_token_delta = {scheduled_token_delta}"
+                )
                 self.scheduler_config.max_num_scheduled_tokens = (
                     max_num_batched_tokens - scheduled_token_delta
+                )
+                debug_log(
+                    f"DEBUG: in VllmConfig._set_max_num_scheduled_tokens, self.scheduler_config.max_num_scheduled_tokens = {self.scheduler_config.max_num_scheduled_tokens}"
                 )
 
             if self.scheduler_config.max_num_scheduled_tokens <= 0:

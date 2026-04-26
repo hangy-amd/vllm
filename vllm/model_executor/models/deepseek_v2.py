@@ -36,6 +36,7 @@ import vllm._custom_ops as ops
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, ParallelConfig, VllmConfig, get_current_vllm_config
+from vllm.context_log import context_end, context_start, debug_log
 from vllm.distributed import (
     get_ep_group,
     get_pp_group,
@@ -349,6 +350,7 @@ class DeepseekV2MoE(nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        context_start("DEBUG: in DeepseekV2MoE.forward")
         num_tokens, hidden_dim = hidden_states.shape
         hidden_states = hidden_states.view(-1, hidden_dim)
 
@@ -360,10 +362,17 @@ class DeepseekV2MoE(nn.Module):
             hidden_states = sequence_parallel_chunk(hidden_states)
 
         if self.experts.is_internal_router:
+            context_start(
+                "DEBUG: in DeepseekV2MoE.forward, final_hidden_states = self.experts"
+            )
             final_hidden_states = self.experts(
                 hidden_states=hidden_states, router_logits=hidden_states
             )
+            context_end()
         else:
+            debug_log(
+                "DEBUG: in DeepseekV2MoE.forward, router_logits, _ = self.gate(hidden_states)"
+            )
             router_logits, _ = self.gate(hidden_states)
             final_hidden_states = self.experts(
                 hidden_states=hidden_states, router_logits=router_logits
@@ -374,7 +383,7 @@ class DeepseekV2MoE(nn.Module):
                 final_hidden_states, 0
             )
             final_hidden_states = final_hidden_states[:num_tokens]
-
+        context_end()
         return final_hidden_states.view(num_tokens, hidden_dim)
 
 
@@ -1115,6 +1124,7 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: torch.Tensor | None,
         llama_4_scaling: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        context_start("DeepseekV2DecoderLayer.forward")
         # Self Attention
         if residual is None:
             residual = hidden_states.clone()
@@ -1128,6 +1138,9 @@ class DeepseekV2DecoderLayer(nn.Module):
         }
         if not self.use_mha:
             attn_kwargs["llama_4_scaling"] = llama_4_scaling
+        debug_log(
+            f"DEBUG: in DeepseekV2DecoderLayer.forward, self.self_attn = {type(self.self_attn)}"
+        )
         hidden_states = self.self_attn(**attn_kwargs)
 
         if (
@@ -1154,7 +1167,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             # The scaling of DeepseekV2MOE output would be done in the forward
             # of DeepseekV2MOE
             hidden_states *= 1.0 / self.routed_scaling_factor
-
+        context_end()
         return hidden_states, residual
 
 
@@ -1163,6 +1176,7 @@ class DeepseekV2Model(nn.Module):
     fall_back_to_pt_during_load = False
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+        context_start("DEBUG: in DeepseekV2Model.__init__")
         super().__init__()
 
         config = vllm_config.model_config.hf_config
@@ -1211,6 +1225,7 @@ class DeepseekV2Model(nn.Module):
         )
 
         self.aux_hidden_state_layers = tuple[int, ...]()
+        context_end()
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -1222,6 +1237,13 @@ class DeepseekV2Model(nn.Module):
         intermediate_tensors: IntermediateTensors | None,
         inputs_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor | IntermediateTensors:
+        context_start("DeepseekV2Model.forward")
+        debug_log(
+            f"DEBUG: input_ids = {input_ids.shape if input_ids is not None else 'None'}"
+        )
+        debug_log(
+            f"DEBUG: inputs_embeds = {inputs_embeds.shape if inputs_embeds is not None else 'None'}"
+        )
         if get_pp_group().is_first_rank:
             if inputs_embeds is not None:
                 hidden_states = inputs_embeds
@@ -1258,19 +1280,29 @@ class DeepseekV2Model(nn.Module):
             start=self.start_layer,
         ):
             if idx in self.aux_hidden_state_layers:
-                aux_hidden_states.append(hidden_states + residual)
+                if residual is not None:
+                    aux_hidden_states.append(hidden_states + residual)
+                else:
+                    aux_hidden_states.append(hidden_states)
+                # aux_hidden_states.append(hidden_states + residual)
             hidden_states, residual = layer(
                 positions, hidden_states, residual, llama_4_scaling
             )
 
         if not get_pp_group().is_last_rank:
+            debug_log("DEBUG: return ckpt 1")
+            context_end()
             return IntermediateTensors(
                 {"hidden_states": hidden_states, "residual": residual}
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)
         if len(aux_hidden_states) > 0:
+            debug_log("DEBUG: return ckpt 2")
+            context_end()
             return hidden_states, aux_hidden_states
+        debug_log("DEBUG: return ckpt 3")
+        context_end()
         return hidden_states
 
 
@@ -1401,7 +1433,8 @@ class DeepseekV2ForCausalLM(
         self.extract_moe_parameters(example_moe)
 
     def set_aux_hidden_state_layers(self, layers: tuple[int, ...]) -> None:
-        self.model.aux_hidden_state_layers = layers
+        self.model.aux_hidden_state_layers = [0, 1, 2, 3, 4, 5]
+        # self.model.aux_hidden_state_layers = layers
 
     def get_eagle3_aux_hidden_state_layers(self) -> tuple[int, ...]:
         num_layers = len(self.model.layers)
@@ -1490,7 +1523,15 @@ class DeepseekV2ForCausalLM(
 
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
+        import regex as re
+
+        pattern = "model\\.layers\\.(\\d+)\\..*"
         for name, loaded_weight in weights:
+            match = re.match(pattern, name)
+            if match:
+                layer_idx = int(match.group(1))
+                if layer_idx >= 6:
+                    continue
             if "rotary_emb.inv_freq" in name:
                 continue
 

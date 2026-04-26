@@ -27,6 +27,7 @@ import torch
 
 import vllm.envs as envs
 from vllm.config import VllmConfig
+from vllm.context_log import debug_log
 from vllm.distributed import destroy_distributed_environment, destroy_model_parallel
 from vllm.distributed.device_communicators.shm_broadcast import Handle, MessageQueue
 from vllm.distributed.kv_transfer.kv_connector.utils import KVOutputAggregator
@@ -828,6 +829,12 @@ class WorkerProc:
         try:
             # Initialize tracer
             rank = kwargs.get("rank", 0)
+            # debug_log(f"DEBUG: in WorkerProc.worker_main, rank {rank}, worker_busy_loop")
+            # import debugpy
+            # if rank == 0:
+            #     debug_log(f"DEBUG: in WorkerProc.worker_main, rank {rank}, waiting for debugger")
+            #     debugpy.listen(10010)
+            #     debugpy.wait_for_client()
             maybe_init_worker_tracer(
                 instrumenting_module_name="vllm.worker",
                 process_kind="worker",
@@ -860,39 +867,45 @@ class WorkerProc:
 
             worker.worker_busy_loop()
 
-        except Exception:
-            # NOTE: if an Exception arises in busy_loop, we send
-            # a FAILURE message over the MQ RPC to notify the Executor,
-            # which triggers system shutdown.
-            # TODO(rob): handle case where the MQ itself breaks.
+        except Exception as e:
+            debug_log(f"DEBUG: in WorkerProc.worker_main, rank {rank}, exception: {e}")
+            import time
 
-            if ready_writer is not None:
-                logger.exception("WorkerProc failed to start.")
-            elif shutdown_requested.is_set():
-                logger.info("WorkerProc shutting down.")
-            else:
-                logger.exception("WorkerProc failed.")
+            time.sleep(3600)
 
-            # The parent sends a SIGTERM to all worker processes if
-            # any worker dies. Set this value so we don't re-throw
-            # SystemExit() to avoid zmq exceptions in __del__.
-            shutdown_requested.set()
+        # except Exception:
+        #     # NOTE: if an Exception arises in busy_loop, we send
+        #     # a FAILURE message over the MQ RPC to notify the Executor,
+        #     # which triggers system shutdown.
+        #     # TODO(rob): handle case where the MQ itself breaks.
 
-        except SystemExit as e:
-            # SystemExit is raised on SIGTERM or SIGKILL, which usually indicates that
-            # the graceful shutdown process did not succeed
-            logger.warning("WorkerProc was terminated")
-            # SystemExit must never be ignored
-            raise e
+        #     if ready_writer is not None:
+        #         logger.exception("WorkerProc failed to start.")
+        #     elif shutdown_requested.is_set():
+        #         logger.info("WorkerProc shutting down.")
+        #     else:
+        #         logger.exception("WorkerProc failed.")
 
-        finally:
-            if ready_writer is not None:
-                ready_writer.close()
-            if death_pipe is not None:
-                death_pipe.close()
-            # Clean up once worker exits busy loop
-            if worker is not None:
-                worker.shutdown()
+        #     # The parent sends a SIGTERM to all worker processes if
+        #     # any worker dies. Set this value so we don't re-throw
+        #     # SystemExit() to avoid zmq exceptions in __del__.
+        #     shutdown_requested.set()
+
+        # except SystemExit as e:
+        #     # SystemExit is raised on SIGTERM or SIGKILL, which usually indicates that
+        #     # the graceful shutdown process did not succeed
+        #     logger.warning("WorkerProc was terminated")
+        #     # SystemExit must never be ignored
+        #     raise e
+
+        # finally:
+        #     if ready_writer is not None:
+        #         ready_writer.close()
+        #     if death_pipe is not None:
+        #         death_pipe.close()
+        #     # Clean up once worker exits busy loop
+        #     if worker is not None:
+        #         worker.shutdown()
 
     class ResponseStatus(Enum):
         SUCCESS = auto()

@@ -13,6 +13,7 @@ from vllm.config.kernel import MoEBackend
 from vllm.config.model import ModelConfig
 from vllm.config.parallel import ParallelConfig
 from vllm.config.utils import config
+from vllm.context_log import debug_log
 from vllm.logger import init_logger
 from vllm.transformers_utils.config import get_hf_text_config
 from vllm.utils.hashing import safe_hash
@@ -574,7 +575,9 @@ class SpeculativeConfig:
 
                 if self.method == "dflash":
                     self.parallel_drafting = True
-
+                debug_log(
+                    "DEBUG: in SpeculativeConfig._post_init, max_num_new_slots_for_drafting is a property method. self.method being 'dflash' or not will affect the value of max_num_new_slots_for_drafting"
+                )
                 if self.num_speculative_tokens is not None and hasattr(
                     self.draft_model_config.hf_config, "num_lookahead_tokens"
                 ):

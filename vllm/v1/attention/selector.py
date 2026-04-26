@@ -7,6 +7,7 @@ from typing import NamedTuple, cast, get_args
 import torch
 
 from vllm.config.cache import CacheDType
+from vllm.context_log import context_end, context_start, debug_log
 from vllm.logger import init_logger
 from vllm.utils.import_utils import resolve_obj_by_qualname
 from vllm.v1.attention.backend import AttentionBackend, AttentionType
@@ -60,7 +61,7 @@ def get_attn_backend(
     num_heads: int | None = None,
 ) -> type[AttentionBackend]:
     """Selects which attention backend to use and lazily imports it."""
-
+    context_start("DEBUG: in get_attn_backend")
     if kv_cache_dtype is not None:
         valid_cache_dtypes = get_args(CacheDType)
         assert kv_cache_dtype in valid_cache_dtypes, (
@@ -82,7 +83,9 @@ def get_attn_backend(
     use_non_causal = (
         speculative_config is not None and speculative_config.method == "dflash"
     )
-
+    debug_log(
+        f"DEBUG: in get_attn_backend, use_non_causal = {use_non_causal}, which is determined by the speculative config method being 'dflash' or not"
+    )
     attn_selector_config = AttentionSelectorConfig(
         head_size=head_size,
         dtype=dtype,
@@ -97,11 +100,14 @@ def get_attn_backend(
         use_non_causal=use_non_causal,
     )
 
-    return _cached_get_attn_backend(
+    backend = _cached_get_attn_backend(
         backend=vllm_config.attention_config.backend,
         attn_selector_config=attn_selector_config,
         num_heads=num_heads,
     )
+    debug_log(f"DEBUG: get backend = {backend}")
+    context_end()
+    return backend
 
 
 @cache

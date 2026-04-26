@@ -11,6 +11,7 @@ from transformers import Qwen3Config
 from vllm import _custom_ops as ops
 from vllm.compilation.decorators import support_torch_compile
 from vllm.config import CacheConfig, VllmConfig, get_current_vllm_config
+from vllm.context_log import context_end, context_start
 from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention
@@ -222,6 +223,7 @@ class DFlashQwen3Model(nn.Module):
         start_layer_id: int = 0,
         prefix: str = "",
     ) -> None:
+        context_start("DEBUG: in DFlashQwen3Model.__init__")
         super().__init__()
         self.config = vllm_config.speculative_config.draft_model_config.hf_config
         self.vocab_size = self.config.vocab_size
@@ -280,6 +282,7 @@ class DFlashQwen3Model(nn.Module):
             self.config.hidden_size,
             eps=self.config.rms_norm_eps,
         )
+        context_end()
 
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
@@ -439,6 +442,7 @@ class DFlashQwen3Model(nn.Module):
         positions: torch.Tensor,
         input_embeds: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        context_start("DFlashQwen3Model.forward")
         if input_embeds is None:
             input_embeds = self.embed_input_ids(input_ids)
 
@@ -452,6 +456,7 @@ class DFlashQwen3Model(nn.Module):
                 residual=residual,
             )
         hidden_states, _ = self.norm(hidden_states, residual)
+        context_end()
         return hidden_states
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

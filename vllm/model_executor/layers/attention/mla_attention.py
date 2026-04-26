@@ -210,6 +210,7 @@ from vllm.config import (
     get_current_vllm_config,
     get_current_vllm_config_or_none,
 )
+from vllm.context_log import context_end, context_start, debug_log
 from vllm.distributed.parallel_state import (
     get_dcp_group,
     is_global_first_rank,
@@ -571,6 +572,9 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                 self._k_scale,
             )
             output = torch.empty(output_shape, dtype=q.dtype, device=q.device)
+            context_start(
+                "DEBUG: in MLAAttention.forward, torch.ops.vllm.unified_mla_attention_with_output"
+            )
             torch.ops.vllm.unified_mla_attention_with_output(
                 q,
                 kv_c_normed,
@@ -579,6 +583,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                 encoded,
                 kv_cache_dummy_dep=kv_cache_dummy_dep,
             )
+            context_end()
             return output
 
     def forward_impl(
@@ -667,8 +672,13 @@ class MLAAttention(nn.Module, AttentionLayerBase):
             )
             num_mqa_tokens = attn_metadata.num_decode_tokens
             num_mha_tokens = q.size(0) - num_mqa_tokens
-
+        debug_log(
+            f"DEBUG: in MLAAttention.forward_impl, num_mha_tokens = {num_mha_tokens}, num_mqa_tokens = {num_mqa_tokens}"
+        )
         if num_mha_tokens > 0:
+            debug_log(
+                f"DEBUG: in MLAAttention.forward_impl, self.impl.forward_mha, self.impl = {type(self.impl)}"
+            )
             self.impl.forward_mha(  # type: ignore[attr-defined]
                 q[num_mqa_tokens:],
                 k_c_normed[num_mqa_tokens:],
@@ -700,6 +710,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
             if self.is_aiter_triton_fp4_bmm_enabled:
                 from aiter.ops.triton.batched_gemm_a16wfp4 import batched_gemm_a16wfp4
 
+                debug_log("DEBUG: in MLAAttention.forward_impl, batched_gemm_a16wfp4")
                 mqa_ql_nope = batched_gemm_a16wfp4(
                     mqa_q_nope,
                     self.W_K,
@@ -710,6 +721,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                 )
             elif self.is_aiter_triton_fp8_bmm_enabled:
                 # Multiply+Transpose (N, B, P)x(N, P, L)->(N, B, L)->(B, N, L)
+                debug_log("DEBUG: in MLAAttention.forward_impl, triton_fp8_bmm")
                 mqa_ql_nope = rocm_aiter_ops.triton_fp8_bmm(
                     mqa_q_nope,
                     self.W_K,
@@ -727,7 +739,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                     mqa_ql_nope.resize_((N, B, L))
                 else:
                     mqa_ql_nope = mqa_q_nope.new_empty((N, B, L))
-
+                debug_log("DEBUG: in MLAAttention.forward_impl, torch.bmm")
                 # Multiply (N, B, P) x (N, P, L) -> (N, B, L)
                 torch.bmm(mqa_q_nope, self.W_UK_T, out=mqa_ql_nope)
 
@@ -1238,6 +1250,10 @@ class MLACommonBackend(AttentionBackend):
     def is_mla(cls) -> bool:
         return True
 
+    @classmethod
+    def supports_non_causal(cls) -> bool:
+        return True
+
 
 @dataclass
 class MLACommonPrefillMetadata:
@@ -1556,6 +1572,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         metadata_cls: type[M] | None = None,
         supports_dcp_with_varlen: bool = False,
     ):
+        context_start("DEBUG: in MLACommonMetadataBuilder.__init__")
         self.metadata_cls = (
             metadata_cls if metadata_cls is not None else MLACommonMetadata
         )
@@ -1670,6 +1687,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
                 f"reorder_batch_threshold must be 1 when query_len_support is "
                 f"SINGLE_ONLY, got {self.reorder_batch_threshold}"
             )
+        context_end()
 
     def _build_fi_prefill_wrappers(self, prefill: FlashInferPrefillMetadata):
         qo_indptr = prefill.query_start_loc
@@ -1792,6 +1810,9 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         common_attn_metadata: CommonAttentionMetadata,
         fast_build: bool = False,
     ) -> M:
+        context_start(
+            f"DEBUG: in MLACommonMetadataBuilder.build, common_attn_metadata = {common_attn_metadata}"
+        )
         num_reqs = common_attn_metadata.num_reqs
         num_tokens = common_attn_metadata.num_actual_tokens
         max_query_len = common_attn_metadata.max_query_len
@@ -1808,13 +1829,17 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         query_start_loc_cpu = common_attn_metadata.query_start_loc_cpu
         seq_lens = common_attn_metadata.seq_lens
         dcp_local_seq_lens = common_attn_metadata.dcp_local_seq_lens
-
+        context_start("DEBUG: split_decodes_and_prefills")
         num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens = (
             split_decodes_and_prefills(
                 common_attn_metadata,
                 decode_threshold=self.reorder_batch_threshold,
                 require_uniform=(self.query_len_support != QueryLenSupport.VARLEN),
             )
+        )
+        context_end()
+        debug_log(
+            f"DEBUG: num_decodes = {num_decodes}, num_prefills = {num_prefills}, num_decode_tokens = {num_decode_tokens}, num_prefill_tokens = {num_prefill_tokens}"
         )
 
         assert num_decodes + num_prefills == num_reqs
@@ -2075,7 +2100,7 @@ class MLACommonMetadataBuilder(AttentionMetadataBuilder[M]):
         if self._use_fi_prefill and num_prefills > 0:
             assert isinstance(attn_metadata.prefill, FlashInferPrefillMetadata)
             self._build_fi_prefill_wrappers(attn_metadata.prefill)
-
+        context_end()
         return attn_metadata  # type: ignore[return-value]
 
 

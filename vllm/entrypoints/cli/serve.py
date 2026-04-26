@@ -42,6 +42,10 @@ class ServeSubcommand(CLISubcommand):
     @staticmethod
     def cmd(args: argparse.Namespace) -> None:
         # If model is specified in CLI (as positional arg), it takes precedence
+        # import debugpy
+        # print(f"\nDEBUG: in ServeSubcommand.cmd, waiting for debugger\n", flush=True)
+        # debugpy.listen(10010)
+        # debugpy.wait_for_client()
         if hasattr(args, "model_tag") and args.model_tag is not None:
             args.model = args.model_tag
 

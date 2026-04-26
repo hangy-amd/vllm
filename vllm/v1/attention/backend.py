@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from vllm.v1.attention.backends.utils import KVCacheLayoutType
     from vllm.v1.kv_cache_interface import AttentionSpec, KVQuantMode
 
+from vllm.context_log import debug_log
 from vllm.v1.kv_cache_interface import get_kv_quant_mode
 
 
@@ -549,6 +550,12 @@ class AttentionMetadataBuilder(ABC, Generic[M]):
                     1
                     + (2 if speculative_config.parallel_drafting else 1)
                     * speculative_config.num_speculative_tokens
+                )
+                debug_log(
+                    f"DEBUG: in _init_reorder_batch_threshold, speculative_config = {speculative_config}"
+                )
+                debug_log(
+                    f"DEBUG: in _init_reorder_batch_threshold, max_num_queries_for_spec = {max_num_queries_for_spec}"
                 )
                 self.reorder_batch_threshold = max(
                     self.reorder_batch_threshold,

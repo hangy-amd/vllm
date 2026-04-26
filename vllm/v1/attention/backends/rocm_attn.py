@@ -10,6 +10,7 @@ import torch
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import VllmConfig
 from vllm.config.cache import CacheDType
+from vllm.context_log import debug_log
 from vllm.logger import init_logger
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     QuantKey,
@@ -398,6 +399,9 @@ class RocmAttentionImpl(AttentionImpl):
         num_actual_tokens = attn_metadata.num_actual_tokens
 
         if self.attn_type in (AttentionType.ENCODER_ONLY, AttentionType.ENCODER):
+            debug_log(
+                "DEBUG: in RocmAttentionImpl.forward, self._forward_encoder_attention"
+            )
             return self._forward_encoder_attention(
                 query[:num_actual_tokens],
                 key[:num_actual_tokens],
@@ -424,6 +428,7 @@ class RocmAttentionImpl(AttentionImpl):
         max_seqlen_k = attn_metadata.max_seq_len
         block_table = attn_metadata.block_table
 
+        debug_log("DEBUG: in RocmAttentionImpl.forward, chunked_prefill_paged_decode")
         # Compute attention and update output up to `num_actual_tokens`.
         chunked_prefill_paged_decode(
             query=query[:num_actual_tokens],

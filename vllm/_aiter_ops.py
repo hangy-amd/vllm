@@ -7,6 +7,7 @@ import torch
 from torch._ops import OpOverload
 
 import vllm.envs as envs
+from vllm.context_log import debug_log
 from vllm.platforms import current_platform
 from vllm.utils.import_utils import PlaceholderModule
 from vllm.utils.torch_utils import direct_register_custom_op
@@ -285,6 +286,9 @@ def _rocm_aiter_biased_grouped_topk_impl(
 ) -> None:
     from aiter import biased_grouped_topk
 
+    debug_log(
+        f"DEBUG: in _rocm_aiter_biased_grouped_topk_impl, biased_grouped_topk, gating_output = {gating_output.shape}, correction_bias = {correction_bias.shape}"
+    )
     biased_grouped_topk(
         gating_output,
         correction_bias,

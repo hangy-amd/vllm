@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from vllm.v1.worker.gpu_input_batch import InputBatch
 
 import vllm.envs as envs
+from vllm.context_log import debug_log
 from vllm.distributed.kv_transfer.kv_connector.utils import (
     get_kv_connector_cache_layout,
 )
@@ -527,11 +528,13 @@ def split_decodes_and_prefills(
         and (not require_uniform or decode_threshold <= 1)
         and treat_short_extends_as_decodes
     ):
+        debug_log("DEBUG: split_decodes_and_prefills ckpt 1")
         return num_reqs, 0, num_tokens, 0
 
     query_lens = query_start_loc[1:] - query_start_loc[:-1]
     if query_lens[0].item() > decode_threshold:
         # first request is not decode, so no decode requests
+        debug_log("DEBUG: split_decodes_and_prefills ckpt 2")
         return 0, num_reqs, 0, num_tokens
 
     if require_uniform:
@@ -539,6 +542,7 @@ def split_decodes_and_prefills(
         # requests may have a query length of 0 but since they are padding its fine
         # to treat them as decodes (ensures num_decodes matches the captured size)
         if torch.all((query_lens == query_lens[0]) | (query_lens == 0)):
+            debug_log("DEBUG: split_decodes_and_prefills ckpt 3")
             return num_reqs, 0, num_tokens, 0  # all decodes
         is_prefill = query_lens != query_lens[0]
     else:
@@ -549,6 +553,7 @@ def split_decodes_and_prefills(
         is_prefill |= common_attn_metadata.is_prefilling
 
     if not torch.any(is_prefill):
+        debug_log("DEBUG: split_decodes_and_prefills ckpt 4")
         return num_reqs, 0, num_tokens, 0
 
     first_prefill = is_prefill.int().argmax(dim=-1).item()
@@ -556,6 +561,7 @@ def split_decodes_and_prefills(
     num_prefills = num_reqs - num_decodes
     num_decode_tokens = query_start_loc[first_prefill].item()
     num_prefill_tokens = num_tokens - num_decode_tokens
+    debug_log("DEBUG: split_decodes_and_prefills ckpt 5")
     return (num_decodes, num_prefills, num_decode_tokens, num_prefill_tokens)
 
 
