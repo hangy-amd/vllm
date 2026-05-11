@@ -4965,6 +4965,29 @@ class GPUModelRunner(
                 layer_ids = dflash_config.get("target_layer_ids")
 
         if layer_ids and isinstance(layer_ids, (list, tuple)):
+            num_target_layers = self.model_config.hf_text_config.num_hidden_layers
+            if any(idx >= num_target_layers for idx in layer_ids):
+                # Drafter config references layer indices from a larger target
+                # (e.g., the full 61-layer model) but the actual target was
+                # trimmed. Evenly redistribute the same number of aux features
+                # across the available layers so the drafter's input feature
+                # count is preserved.
+                k = len(layer_ids)
+                if num_target_layers >= k:
+                    remapped = [
+                        int(round(i * (num_target_layers - 1) / max(k - 1, 1)))
+                        for i in range(k)
+                    ]
+                else:
+                    remapped = list(range(num_target_layers))
+                logger.warning(
+                    "Eagle/DFlash aux_layer_ids %s out of range for target "
+                    "with %d layers; remapping to %s",
+                    list(layer_ids),
+                    num_target_layers,
+                    remapped,
+                )
+                layer_ids = remapped
             return tuple(layer_ids)
 
         return None

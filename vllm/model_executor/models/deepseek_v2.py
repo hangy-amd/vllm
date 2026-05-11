@@ -24,6 +24,7 @@
 # limitations under the License.
 """Inference-only DeepseekV2/DeepseekV3 model."""
 
+import re
 import typing
 from collections.abc import Callable, Iterable
 from itertools import islice
@@ -1272,7 +1273,12 @@ class DeepseekV2Model(nn.Module):
             start=self.start_layer,
         ):
             if idx in self.aux_hidden_state_layers:
-                aux_hidden_states.append(hidden_states + residual)
+                # `residual` is None at the very first transformer layer (the
+                # accumulated residual stream hasn't started yet). In that
+                # case the aux state is just `hidden_states`.
+                aux_hidden_states.append(
+                    hidden_states if residual is None else hidden_states + residual
+                )
             hidden_states, residual = layer(
                 positions, hidden_states, residual, llama_4_scaling
             )
@@ -1512,6 +1518,14 @@ class DeepseekV2ForCausalLM(
             if spec_layer is not None:
                 continue  # skip spec decode layers for main model
 
+            # Skip weights for layers beyond num_hidden_layers. This handles
+            # checkpoints that have been hand-trimmed to a smaller number of
+            # layers (e.g., debug/testing builds) but still ship safetensors
+            # shards for the original layer indices.
+            extra_layer_idx = _maybe_extract_extra_layer_idx(self.config, name)
+            if extra_layer_idx is not None:
+                continue
+
             is_fusion_moe_shared_experts_layer = (
                 rocm_aiter_moe_shared_expert_enabled and ("mlp.shared_experts" in name)
             )
@@ -1689,6 +1703,27 @@ class GlmMoeDsaForCausalLM(DeepseekV2ForCausalLM):
 
 # Compatibility with
 # https://huggingface.co/deepseek-ai/DeepSeek-V3-Base/blob/main/configuration_deepseek.py
+_LAYER_PREFIX_RE = re.compile(r"^model\.layers\.(\d+)\.")
+
+
+def _maybe_extract_extra_layer_idx(
+    config: DeepseekV2Config | DeepseekV3Config, weight_name: str
+) -> int | None:
+    """Return the layer index if `weight_name` belongs to a transformer block
+    beyond `config.num_hidden_layers` (and is not an MTP/spec layer)."""
+    m = _LAYER_PREFIX_RE.match(weight_name)
+    if m is None:
+        return None
+    idx = int(m.group(1))
+    num_layers = config.num_hidden_layers
+    num_nextn = getattr(config, "num_nextn_predict_layers", 0) or 0
+    if num_layers <= idx < num_layers + num_nextn:
+        return None  # MTP layer; handled by get_spec_layer_idx_from_weight_name
+    if idx >= num_layers + num_nextn:
+        return idx
+    return None
+
+
 def get_spec_layer_idx_from_weight_name(
     config: DeepseekV2Config | DeepseekV3Config, weight_name: str
 ) -> int | None:
